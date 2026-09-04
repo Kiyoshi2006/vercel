@@ -1,0 +1,8 @@
+{
+  "name": "Kiyoshi Repo",
+  "description": "Custom extensions for SkyStream",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/plugins.json"
+  ]
+}
