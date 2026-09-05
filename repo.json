@@ -1,8 +1,16 @@
 {
   "name": "Kiyoshi Repo",
-  "description": "Custom extensions for SkyStream",
+  "description": "Kho tiện ích AnimeVietsub",
   "manifestVersion": 1,
-  "pluginLists": [
-    "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/plugins.json"
+  "pluginUrl": "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/Animevs.js",
+  "plugins": [
+    {
+      "id": "animevietsub",
+      "name": "AnimeVietsub",
+      "version": "1.0.0",
+      "url": "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/Animevs.js",
+      "iconUrl": "https://animevietsub.site/assets/images/favicon.ico",
+      "types": ["anime", "movie"]
+    }
   ]
 }
