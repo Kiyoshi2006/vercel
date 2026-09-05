@@ -3,14 +3,14 @@
   "id": "com.kiyoshi.repo",
   "packageName": "com.kiyoshi.repo",
   "description": "Kho tiện ích AnimeVietsub",
-  "version": "1.0.0",
+  "version": 1,
   "manifestVersion": 1,
   "plugin": [
     {
       "name": "AnimeVietsub",
       "id": "com.kiyoshi.animevietsub",
       "packageName": "com.kiyoshi.animevietsub",
-      "version": "1.0.0",
+      "version": 1,
       "url": "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/Animevs.js",
       "iconUrl": "https://animevietsub.site/assets/images/favicon.ico",
       "types": ["anime", "movie"]
@@ -21,19 +21,10 @@
       "name": "AnimeVietsub",
       "id": "com.kiyoshi.animevietsub",
       "packageName": "com.kiyoshi.animevietsub",
-      "version": "1.0.0",
+      "version": 1,
       "url": "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/Animevs.js",
       "iconUrl": "https://animevietsub.site/assets/images/favicon.ico",
       "types": ["anime", "movie"]
-    }
-  ],
-  "repos": [
-    {
-      "name": "AnimeVietsub",
-      "id": "com.kiyoshi.animevietsub",
-      "packageName": "com.kiyoshi.animevietsub",
-      "version": "1.0.0",
-      "url": "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/Animevs.js"
     }
   ]
 }
