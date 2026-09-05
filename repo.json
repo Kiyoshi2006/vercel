@@ -5,5 +5,25 @@
   "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/plugins.json"
+  ],
+  "plugins": [
+    {
+      "packageName": "com.kiyoshi.animevietsub",
+      "name": "AnimeVietsub",
+      "version": 1,
+      "baseUrl": "https://animevietsub.site",
+      "description": "Xem anime Vietsub online Full HD nhanh nhất",
+      "authors": [
+        "Kiyoshi"
+      ],
+      "languages": [
+        "vi"
+      ],
+      "categories": [
+        "Anime",
+        "Movies"
+      ],
+      "url": "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/com.kiyoshi.animevietsub.sky"
+    }
   ]
 }
