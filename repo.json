@@ -10,20 +10,13 @@
     {
       "packageName": "com.kiyoshi.animevietsub",
       "name": "AnimeVietsub",
-      "version": 1,
+      "version": 2,
       "baseUrl": "https://animevietsub.site",
       "description": "Xem anime Vietsub online Full HD nhanh nhất",
-      "authors": [
-        "Kiyoshi"
-      ],
-      "languages": [
-        "vi"
-      ],
-      "categories": [
-        "Anime",
-        "Movies"
-      ],
-      "url": "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/com.kiyoshi.animevietsub.sky"
+      "authors": ["Kiyoshi"],
+      "languages": ["vi"],
+      "categories": ["Anime", "Movies"],
+      "url": "https://github.com/Kiyoshi2006/vercel/releases/download/v1.0.0/com.kiyoshi.animevietsub.sky"
     }
   ]
 }
