@@ -1,9 +1,0 @@
-{
-  "name": "Kiyoshi Repo",
-  "packageName": "com.kiyoshi",
-  "description": "Kho tiện ích AnimeVietsub cho SkyStream",
-  "manifestVersion": 1,
-  "pluginLists": [
-    "https://raw.githubusercontent.com/Kiyoshi2006/vercel/main/plugins.json"
-  ]
-}
