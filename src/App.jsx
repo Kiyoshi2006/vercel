@@ -106,7 +106,10 @@ export default function App() {
       }
 
       const data = await res.json();
-      const finalUrl = `${window.location.origin}/p/${data.id}.m3u8`;
+      // Dùng domain chính thức của Pages, không dùng subdomain commit
+const BASE_DOMAIN = "https://vercel-1z4.pages.dev";
+const finalUrl = `${BASE_DOMAIN}/p/${data.id}.m3u8`;
+
       setGeneratedUrl(finalUrl);
       setCopied(false);
     } catch (err) {
