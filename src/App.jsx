@@ -2,17 +2,17 @@ import React, { useState, useRef, useEffect } from 'react';
 import Hls from 'hls.js';
 
 export default function App() {
-  const [m3u8Content, setM3u8Content] = useState('');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [subUrl, setSubUrl] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [subName, setSubName] = useState('');
   const [cues, setCues] = useState([]);
   const [activeSubtitle, setActiveSubtitle] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const hlsRef = useRef(null);
-  const blobUrlRef = useRef(null);
 
   const parseTimeToSeconds = (str) => {
     if (!str) return 0;
@@ -105,17 +105,16 @@ export default function App() {
     return parsedCues;
   };
 
-  const handleSubtitleFile = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target.result;
-      const lowerName = file.name.toLowerCase();
+  // Tải nội dung phụ đề trực tiếp từ Link WebDAV (.ass / .srt / .vtt)
+  const loadSubtitleFromUrl = async (url) => {
+    if (!url.trim()) return;
+    try {
+      const res = await fetch(url.trim());
+      const content = await res.text();
+      const lower = url.toLowerCase();
       let parsed = [];
 
-      if (lowerName.endsWith('.ass') || lowerName.endsWith('.ssa')) {
+      if (lower.endsWith('.ass') || lower.endsWith('.ssa')) {
         parsed = parseAssSubtitle(content);
       } else {
         parsed = parseSrtOrVtt(content);
@@ -123,26 +122,23 @@ export default function App() {
 
       parsed.sort((a, b) => a.start - b.start);
       setCues(parsed);
-      setSubName(file.name);
-    };
-    reader.readAsText(file);
+    } catch (err) {
+      console.error('Không tải được file phụ đề:', err);
+    }
   };
 
-  const handlePlayStream = () => {
+  const handlePlayStream = async () => {
     setErrorMsg('');
-    const trimmed = m3u8Content.trim();
-    if (!trimmed.startsWith('#EXTM3U')) {
-      setErrorMsg('Nội dung phải bắt đầu bằng #EXTM3U');
+    const vUrl = videoUrl.trim();
+    if (!vUrl) {
+      setErrorMsg('Vui lòng nhập link video từ WebDAV!');
       return;
     }
 
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current);
+    // Nếu có nhập link phụ đề, tiến hành tải về đọc mốc thời gian
+    if (subUrl.trim()) {
+      await loadSubtitleFromUrl(subUrl);
     }
-
-    const blob = new Blob([trimmed], { type: 'application/vnd.apple.mpegurl' });
-    const playlistUrl = URL.createObjectURL(blob);
-    blobUrlRef.current = playlistUrl;
 
     const video = videoRef.current;
     if (!video) return;
@@ -151,33 +147,26 @@ export default function App() {
       hlsRef.current.destroy();
     }
 
-    if (Hls.isSupported()) {
-      const hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-      });
+    // Kiểm tra xem link có phải định dạng HLS (.m3u8) hay video trực tiếp (.mkv, .mp4)
+    if (vUrl.includes('.m3u8') && Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
       hlsRef.current = hls;
-
-      hls.loadSource(playlistUrl);
+      hls.loadSource(vUrl);
       hls.attachMedia(video);
-
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch((err) => console.log('Chặn autoplay:', err));
+        video.play().catch(() => {});
       });
-
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          setErrorMsg(`Lỗi luồng phát: ${data.details}`);
-        }
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playlistUrl;
-      video.addEventListener('loadedmetadata', () => {
-        video.play().catch((err) => console.log('Chặn autoplay:', err));
+        if (data.fatal) setErrorMsg(`Lỗi HLS: ${data.details}`);
       });
     } else {
-      setErrorMsg('Trình duyệt không hỗ trợ HLS.');
+      // Phát trực tiếp các định dạng MP4, MKV từ link WebDAV (nếu trình duyệt hỗ trợ codec)
+      video.src = vUrl;
+      video.load();
+      video.play().catch(() => {});
     }
+
+    setIsLoaded(true);
   };
 
   const handleTimeUpdate = () => {
@@ -200,9 +189,7 @@ export default function App() {
     if (!container) return;
 
     if (!document.fullscreenElement) {
-      container.requestFullscreen().catch((err) => {
-        console.error('Không thể mở toàn màn hình:', err);
-      });
+      container.requestFullscreen().catch(() => {});
     } else {
       document.exitFullscreen();
     }
@@ -213,7 +200,6 @@ export default function App() {
       setIsFullscreen(!!document.fullscreenElement);
     };
 
-    // Tự động vào toàn màn hình khi xoay ngang điện thoại
     const handleOrientationChange = () => {
       if (window.innerHeight < window.innerWidth) {
         if (!document.fullscreenElement && containerRef.current) {
@@ -229,37 +215,60 @@ export default function App() {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('resize', handleOrientationChange);
       if (hlsRef.current) hlsRef.current.destroy();
-      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
     };
   }, []);
 
   return (
-    <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <h2>Trình phát M3U8 (Chạm 2 lần để Full màn hình)</h2>
+    <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif', color: '#f8fafc' }}>
+      <h2>Trình phát Video WebDAV (Hỗ trợ Link Trực tiếp)</h2>
 
-      <textarea
-        rows={6}
-        style={{
-          width: '100%',
-          backgroundColor: '#1e293b',
-          color: '#e2e8f0',
-          borderRadius: 6,
-          padding: 10,
-          boxSizing: 'border-box',
-          border: '1px solid #334155',
-          fontFamily: 'monospace',
-          fontSize: 12,
-        }}
-        placeholder="Dán toàn bộ nội dung #EXTM3U vào đây..."
-        value={m3u8Content}
-        onChange={(e) => setM3u8Content(e.target.value)}
-      />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+        <div>
+          <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Link Video (.mkv, .mp4, .m3u8) từ WebDAV:</label>
+          <input
+            type="text"
+            style={{
+              width: '100%',
+              backgroundColor: '#1e293b',
+              color: '#e2e8f0',
+              borderRadius: 6,
+              padding: 10,
+              boxSizing: 'border-box',
+              border: '1px solid #334155',
+              fontSize: 13,
+            }}
+            placeholder="Dán link sao chép từ WebDAV vào đây..."
+            value={videoUrl}
+            onChange={(e) => setVideoUrl(e.target.value)}
+          />
+        </div>
 
-      <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div>
+          <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Link Phụ đề (.ass, .srt, .vtt) từ WebDAV (Tùy chọn):</label>
+          <input
+            type="text"
+            style={{
+              width: '100%',
+              backgroundColor: '#1e293b',
+              color: '#e2e8f0',
+              borderRadius: 6,
+              padding: 10,
+              boxSizing: 'border-box',
+              border: '1px solid #334155',
+              fontSize: 13,
+            }}
+            placeholder="Dán link file .ass tương ứng vào đây..."
+            value={subUrl}
+            onChange={(e) => setSubUrl(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
           onClick={handlePlayStream}
           style={{
-            padding: '8px 20px',
+            padding: '10px 24px',
             background: '#2563eb',
             color: '#fff',
             border: 'none',
@@ -268,32 +277,12 @@ export default function App() {
             fontWeight: 600,
           }}
         >
-          Nạp luồng & Phát
+          Phát Ngay
         </button>
 
-        <label
-          style={{
-            padding: '8px 14px',
-            background: '#334155',
-            color: '#f8fafc',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontSize: 13,
-            border: '1px solid #475569',
-          }}
-        >
-          Chọn tệp phụ đề (.ass, .srt, .vtt)
-          <input
-            type="file"
-            accept=".ass,.ssa,.srt,.vtt"
-            style={{ display: 'none' }}
-            onChange={handleSubtitleFile}
-          />
-        </label>
-
-        {subName && (
-          <span style={{ fontSize: 12, color: cues.length > 0 ? '#38bdf8' : '#ef4444' }}>
-            Đã nạp: {subName} ({cues.length} câu)
+        {subUrl && (
+          <span style={{ fontSize: 12, color: cues.length > 0 ? '#38bdf8' : '#e2e8f0' }}>
+            {cues.length > 0 ? `Đã nạp phụ đề (${cues.length} câu)` : 'Đang tải phụ đề...'}
           </span>
         )}
       </div>
@@ -302,7 +291,7 @@ export default function App() {
         <div style={{ color: '#ef4444', marginTop: 10, fontSize: 13 }}>{errorMsg}</div>
       )}
 
-      {/* Double click/tap vào khung này để bật/tắt toàn màn hình */}
+      {/* Khung phát video hỗ trợ Double-tap Fullscreen & Subtitle Overlay */}
       <div
         ref={containerRef}
         onDoubleClick={toggleFullscreen}
