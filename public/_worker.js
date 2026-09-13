@@ -1,8 +1,8 @@
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Xử lý preflight CORS
+    // 1. Xử lý preflight CORS
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -13,15 +13,15 @@ export default {
       });
     }
 
-    // Endpoint nhận mã Base64 qua query param: /playlist.m3u8?data=<base64>
+    // 2. Chỉ xử lý các link kết thúc bằng .m3u8
     if (url.pathname.endsWith(".m3u8")) {
       const encodedData = url.searchParams.get("data");
       if (!encodedData) {
-        return new Response("Missing data", { status: 400 });
+        return new Response("Missing data parameter", { status: 400 });
       }
 
       try {
-        // Giải mã nội dung m3u8 từ chuỗi base64 UTF-8
+        // Giải mã chuỗi base64 UTF-8
         const decodedText = decodeURIComponent(escape(atob(encodedData)));
         return new Response(decodedText, {
           headers: {
@@ -35,6 +35,8 @@ export default {
       }
     }
 
-    return new Response("Worker is running", { status: 200 });
+    // 3. QUAN TRỌNG: Nếu là các trang khác hoặc file giao diện (HTML/JS/CSS),
+    // chuyển tiếp cho Cloudflare Pages tự trả về giao diện web:
+    return env.ASSETS.fetch(request);
   },
 };
