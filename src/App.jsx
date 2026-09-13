@@ -2,11 +2,15 @@ import React, { useState, useRef, useEffect } from 'react';
 import Hls from 'hls.js';
 
 export default function App() {
-  const [sourceType, setSourceType] = useState('direct'); // 'direct' (link trực tiếp) hoặc 'text' (nội dung m3u8)
+  const [sourceType, setSourceType] = useState('direct'); // 'direct' (link trực tiếp) hoặc 'text' (m3u8 text)
   const [mediaUrl, setMediaUrl] = useState('');
   const [m3u8Content, setM3u8Content] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
+  
+  const [subMode, setSubMode] = useState('off'); // 'off' (tắt), 'online' (dán link), 'offline' (tải tệp)
+  const [subUrl, setSubUrl] = useState('');
   const [subName, setSubName] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  
   const [cues, setCues] = useState([]);
   const [activeSubtitle, setActiveSubtitle] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -107,6 +111,32 @@ export default function App() {
     return parsedCues;
   };
 
+  // Nạp sub online qua Cors Proxy để không bị đơ/chặn
+  const loadOnlineSubtitle = async (url) => {
+    if (!url.trim()) return;
+    try {
+      // Dùng dịch vụ corsproxy công khai để bypass lỗi từ Google Drive / WebDAV
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url.trim())}`;
+      const res = await fetch(proxyUrl);
+      const content = await res.text();
+      
+      const lower = url.toLowerCase();
+      let parsed = [];
+      if (lower.endsWith('.ass') || lower.endsWith('.ssa')) {
+        parsed = parseAssSubtitle(content);
+      } else {
+        parsed = parseSrtOrVtt(content);
+      }
+
+      parsed.sort((a, b) => a.start - b.start);
+      setCues(parsed);
+      setSubName(url.split('/').pop() || 'Online Sub');
+    } catch (err) {
+      console.error('Lỗi tải sub online:', err);
+      setErrorMsg('Không thể tải file phụ đề online (lỗi kết nối hoặc CORS).');
+    }
+  };
+
   const handleSubtitleFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -130,10 +160,18 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const handlePlayStream = () => {
+  const handlePlayStream = async () => {
     setErrorMsg('');
     const video = videoRef.current;
     if (!video) return;
+
+    // Nếu chọn sub online, tiến hành kéo nội dung về trước khi phát
+    if (subMode === 'online' && subUrl.trim()) {
+      await loadOnlineSubtitle(subUrl);
+    } else if (subMode === 'off') {
+      setCues([]);
+      setSubName('');
+    }
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -239,10 +277,10 @@ export default function App() {
 
   return (
     <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif', color: '#f8fafc' }}>
-      <h2>Trình phát M3U8 & Link Trực tiếp (WebDAV/Drive)</h2>
+      <h2>Trình phát Video & Sub linh hoạt</h2>
 
-      {/* Lựa chọn chế độ nguồn phát */}
-      <div style={{ display: 'flex', gap: 15, marginBottom: 10, fontSize: 14 }}>
+      {/* Chọn loại nguồn Video */}
+      <div style={{ display: 'flex', gap: 15, marginBottom: 8, fontSize: 13 }}>
         <label style={{ cursor: 'pointer' }}>
           <input
             type="radio"
@@ -251,7 +289,7 @@ export default function App() {
             checked={sourceType === 'direct'}
             onChange={() => setSourceType('direct')}
           />{' '}
-          Dán Link Trực tiếp (.mp4, .mkv, .m3u8)
+          Link Trực tiếp (.mp4, .mkv, .m3u8)
         </label>
         <label style={{ cursor: 'pointer' }}>
           <input
@@ -261,7 +299,7 @@ export default function App() {
             checked={sourceType === 'text'}
             onChange={() => setSourceType('text')}
           />{' '}
-          Dán nội dung văn bản M3U8 (#EXTM3U)
+          Văn bản M3U8 (#EXTM3U)
         </label>
       </div>
 
@@ -274,12 +312,12 @@ export default function App() {
               backgroundColor: '#1e293b',
               color: '#e2e8f0',
               borderRadius: 6,
-              padding: 10,
+              padding: 9,
               boxSizing: 'border-box',
               border: '1px solid #334155',
               fontSize: 13,
             }}
-            placeholder="Dán link từ WebDAV / Google Drive vào đây..."
+            placeholder="Dán link video từ WebDAV hoặc Google Drive..."
             value={mediaUrl}
             onChange={(e) => setMediaUrl(e.target.value)}
           />
@@ -287,73 +325,135 @@ export default function App() {
       ) : (
         <div style={{ marginBottom: 10 }}>
           <textarea
-            rows={5}
+            rows={4}
             style={{
               width: '100%',
               backgroundColor: '#1e293b',
               color: '#e2e8f0',
               borderRadius: 6,
-              padding: 10,
+              padding: 9,
               boxSizing: 'border-box',
               border: '1px solid #334155',
               fontFamily: 'monospace',
               fontSize: 12,
             }}
-            placeholder="Dán toàn bộ nội dung #EXTM3U vào đây..."
+            placeholder="Dán nội dung #EXTM3U vào đây..."
             value={m3u8Content}
             onChange={(e) => setM3u8Content(e.target.value)}
           />
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <button
-          onClick={handlePlayStream}
-          style={{
-            padding: '9px 22px',
-            background: '#2563eb',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          Phát Ngay
-        </button>
+      {/* Tùy chọn chế độ Phụ đề (Tắt / Online / Offline) */}
+      <div style={{ background: '#1e293b', padding: 10, borderRadius: 6, marginBottom: 10, border: '1px solid #334155' }}>
+        <div style={{ fontSize: 13, marginBottom: 6, fontWeight: 600 }}>Cài đặt Phụ đề:</div>
+        <div style={{ display: 'flex', gap: 15, marginBottom: 8, fontSize: 13 }}>
+          <label style={{ cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="subMode"
+              value="off"
+              checked={subMode === 'off'}
+              onChange={() => { setSubMode('off'); setCues([]); setSubName(''); }}
+            />{' '}
+            Tắt Sub
+          </label>
+          <label style={{ cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="subMode"
+              value="online"
+              checked={subMode === 'online'}
+              onChange={() => setSubMode('online')}
+            />{' '}
+            Sub Online (Dán Link)
+          </label>
+          <label style={{ cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="subMode"
+              value="offline"
+              checked={subMode === 'offline'}
+              onChange={() => setSubMode('offline')}
+            />{' '}
+            Sub Offline (Chọn Tệp)
+          </label>
+        </div>
 
-        <label
-          style={{
-            padding: '8px 14px',
-            background: '#334155',
-            color: '#f8fafc',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontSize: 13,
-            border: '1px solid #475569',
-          }}
-        >
-          Chọn tệp phụ đề (.ass, .srt, .vtt)
-          <input
-            type="file"
-            accept=".ass,.ssa,.srt,.vtt"
-            style={{ display: 'none' }}
-            onChange={handleSubtitleFile}
-          />
-        </label>
+        {subMode === 'online' && (
+          <div>
+            <input
+              type="text"
+              style={{
+                width: '100%',
+                backgroundColor: '#0f172a',
+                color: '#e2e8f0',
+                borderRadius: 4,
+                padding: 8,
+                boxSizing: 'border-box',
+                border: '1px solid #475569',
+                fontSize: 12,
+              }}
+              placeholder="Dán link file phụ đề (.ass, .srt, .vtt) từ Drive/WebDAV..."
+              value={subUrl}
+              onChange={(e) => setSubUrl(e.target.value)}
+            />
+          </div>
+        )}
+
+        {subMode === 'offline' && (
+          <div>
+            <label
+              style={{
+                display: 'inline-block',
+                padding: '6px 12px',
+                background: '#334155',
+                color: '#f8fafc',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 12,
+                border: '1px solid #475569',
+              }}
+            >
+              Bấm để chọn tệp (.ass, .srt, .vtt) từ thiết bị
+              <input
+                type="file"
+                accept=".ass,.ssa,.srt,.vtt"
+                style={{ display: 'none' }}
+                onChange={handleSubtitleFile}
+              />
+            </label>
+          </div>
+        )}
 
         {subName && (
-          <span style={{ fontSize: 12, color: cues.length > 0 ? '#38bdf8' : '#ef4444' }}>
+          <div style={{ fontSize: 12, color: cues.length > 0 ? '#38bdf8' : '#ef4444', marginTop: 6 }}>
             Đã nạp: {subName} ({cues.length} câu)
-          </span>
+          </div>
         )}
       </div>
+
+      <button
+        onClick={handlePlayStream}
+        style={{
+          padding: '9px 24px',
+          background: '#2563eb',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 6,
+          cursor: 'pointer',
+          fontWeight: 600,
+          fontSize: 14,
+        }}
+      >
+        Phát Ngay
+      </button>
 
       {errorMsg && (
         <div style={{ color: '#ef4444', marginTop: 10, fontSize: 13 }}>{errorMsg}</div>
       )}
 
-      {/* Khung chứa Video & Subtitle tối ưu toàn màn hình */}
+      {/* Khung hiển thị Video & Sub Overlay */}
       <div
         ref={containerRef}
         style={{
