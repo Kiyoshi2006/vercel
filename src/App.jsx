@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import Hls from 'hls.js';
 
 export default function App() {
+  const [sourceType, setSourceType] = useState('direct'); // 'direct' (link trực tiếp) hoặc 'text' (nội dung m3u8)
+  const [mediaUrl, setMediaUrl] = useState('');
   const [m3u8Content, setM3u8Content] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [subName, setSubName] = useState('');
@@ -14,7 +16,6 @@ export default function App() {
   const hlsRef = useRef(null);
   const blobUrlRef = useRef(null);
 
-  // Xử lý thời gian phụ đề
   const parseTimeToSeconds = (str) => {
     if (!str) return 0;
     const parts = str.trim().replace(',', '.').split(':');
@@ -129,56 +130,71 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  // Logic nạp và phát luồng M3U8 chuẩn từ bản chạy tốt của bạn
   const handlePlayStream = () => {
     setErrorMsg('');
-    const trimmed = m3u8Content.trim();
-    if (!trimmed.startsWith('#EXTM3U')) {
-      setErrorMsg('Nội dung phải bắt đầu bằng #EXTM3U');
-      return;
-    }
-
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current);
-    }
-
-    const blob = new Blob([trimmed], { type: 'application/vnd.apple.mpegurl' });
-    const playlistUrl = URL.createObjectURL(blob);
-    blobUrlRef.current = playlistUrl;
-
     const video = videoRef.current;
     if (!video) return;
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
     }
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+    }
 
-    if (Hls.isSupported()) {
-      const hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-      });
-      hlsRef.current = hls;
+    if (sourceType === 'direct') {
+      const url = mediaUrl.trim();
+      if (!url) {
+        setErrorMsg('Vui lòng nhập đường dẫn video!');
+        return;
+      }
 
-      hls.loadSource(playlistUrl);
-      hls.attachMedia(video);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch((err) => console.log('Chặn autoplay:', err));
-      });
-
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          setErrorMsg(`Lỗi luồng phát: ${data.details}`);
-        }
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playlistUrl;
-      video.addEventListener('loadedmetadata', () => {
-        video.play().catch((err) => console.log('Chặn autoplay:', err));
-      });
+      if (url.includes('.m3u8') && Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hlsRef.current = hls;
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(() => {});
+        });
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) setErrorMsg(`Lỗi HLS: ${data.details}`);
+        });
+      } else {
+        video.src = url;
+        video.load();
+        video.play().catch(() => {});
+      }
     } else {
-      setErrorMsg('Trình duyệt không hỗ trợ HLS.');
+      const trimmed = m3u8Content.trim();
+      if (!trimmed.startsWith('#EXTM3U')) {
+        setErrorMsg('Nội dung M3U8 phải bắt đầu bằng #EXTM3U');
+        return;
+      }
+
+      const blob = new Blob([trimmed], { type: 'application/vnd.apple.mpegurl' });
+      const playlistUrl = URL.createObjectURL(blob);
+      blobUrlRef.current = playlistUrl;
+
+      if (Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hlsRef.current = hls;
+        hls.loadSource(playlistUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(() => {});
+        });
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) setErrorMsg(`Lỗi HLS: ${data.details}`);
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = playlistUrl;
+        video.addEventListener('loadedmetadata', () => {
+          video.play().catch(() => {});
+        });
+      } else {
+        setErrorMsg('Trình duyệt không hỗ trợ HLS.');
+      }
     }
   };
 
@@ -202,9 +218,7 @@ export default function App() {
     if (!container) return;
 
     if (!document.fullscreenElement) {
-      container.requestFullscreen().catch((err) => {
-        console.error('Không thể mở toàn màn hình:', err);
-      });
+      container.requestFullscreen().catch(() => {});
     } else {
       document.exitFullscreen();
     }
@@ -215,52 +229,88 @@ export default function App() {
       setIsFullscreen(!!document.fullscreenElement);
     };
 
-    const handleOrientationChange = () => {
-      if (window.innerHeight < window.innerWidth) {
-        if (!document.fullscreenElement && containerRef.current) {
-          containerRef.current.requestFullscreen().catch(() => {});
-        }
-      }
-    };
-
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    window.addEventListener('resize', handleOrientationChange);
-
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      window.removeEventListener('resize', handleOrientationChange);
       if (hlsRef.current) hlsRef.current.destroy();
       if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
     };
   }, []);
 
   return (
-    <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <h2>Trình phát M3U8 + Phụ đề Offline</h2>
+    <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif', color: '#f8fafc' }}>
+      <h2>Trình phát M3U8 & Link Trực tiếp (WebDAV/Drive)</h2>
 
-      <textarea
-        rows={6}
-        style={{
-          width: '100%',
-          backgroundColor: '#1e293b',
-          color: '#e2e8f0',
-          borderRadius: 6,
-          padding: 10,
-          boxSizing: 'border-box',
-          border: '1px solid #334155',
-          fontFamily: 'monospace',
-          fontSize: 12,
-        }}
-        placeholder="Dán toàn bộ nội dung #EXTM3U vào đây..."
-        value={m3u8Content}
-        onChange={(e) => setM3u8Content(e.target.value)}
-      />
+      {/* Lựa chọn chế độ nguồn phát */}
+      <div style={{ display: 'flex', gap: 15, marginBottom: 10, fontSize: 14 }}>
+        <label style={{ cursor: 'pointer' }}>
+          <input
+            type="radio"
+            name="sourceType"
+            value="direct"
+            checked={sourceType === 'direct'}
+            onChange={() => setSourceType('direct')}
+          />{' '}
+          Dán Link Trực tiếp (.mp4, .mkv, .m3u8)
+        </label>
+        <label style={{ cursor: 'pointer' }}>
+          <input
+            type="radio"
+            name="sourceType"
+            value="text"
+            checked={sourceType === 'text'}
+            onChange={() => setSourceType('text')}
+          />{' '}
+          Dán nội dung văn bản M3U8 (#EXTM3U)
+        </label>
+      </div>
 
-      <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      {sourceType === 'direct' ? (
+        <div style={{ marginBottom: 10 }}>
+          <input
+            type="text"
+            style={{
+              width: '100%',
+              backgroundColor: '#1e293b',
+              color: '#e2e8f0',
+              borderRadius: 6,
+              padding: 10,
+              boxSizing: 'border-box',
+              border: '1px solid #334155',
+              fontSize: 13,
+            }}
+            placeholder="Dán link từ WebDAV / Google Drive vào đây..."
+            value={mediaUrl}
+            onChange={(e) => setMediaUrl(e.target.value)}
+          />
+        </div>
+      ) : (
+        <div style={{ marginBottom: 10 }}>
+          <textarea
+            rows={5}
+            style={{
+              width: '100%',
+              backgroundColor: '#1e293b',
+              color: '#e2e8f0',
+              borderRadius: 6,
+              padding: 10,
+              boxSizing: 'border-box',
+              border: '1px solid #334155',
+              fontFamily: 'monospace',
+              fontSize: 12,
+            }}
+            placeholder="Dán toàn bộ nội dung #EXTM3U vào đây..."
+            value={m3u8Content}
+            onChange={(e) => setM3u8Content(e.target.value)}
+          />
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
           onClick={handlePlayStream}
           style={{
-            padding: '8px 20px',
+            padding: '9px 22px',
             background: '#2563eb',
             color: '#fff',
             border: 'none',
@@ -269,7 +319,7 @@ export default function App() {
             fontWeight: 600,
           }}
         >
-          Nạp luồng & Phát
+          Phát Ngay
         </button>
 
         <label
@@ -303,10 +353,9 @@ export default function App() {
         <div style={{ color: '#ef4444', marginTop: 10, fontSize: 13 }}>{errorMsg}</div>
       )}
 
-      {/* Khung video kết hợp Double click/tap & Nút bấm tùy chỉnh để Full màn hình kèm sub chuẩn */}
+      {/* Khung chứa Video & Subtitle tối ưu toàn màn hình */}
       <div
         ref={containerRef}
-        onDoubleClick={toggleFullscreen}
         style={{
           position: 'relative',
           width: '100%',
@@ -319,7 +368,6 @@ export default function App() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          cursor: 'pointer',
         }}
       >
         <video
