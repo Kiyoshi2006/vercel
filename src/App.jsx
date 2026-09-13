@@ -1,96 +1,67 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Hls from 'hls.js';
 
+// Thay đổi domain Worker/Vercel của bạn tại đây
+const WORKER_ENDPOINT = 'https://3bee7a66.vercel-1z4.pages.dev/';
+
 export default function App() {
   const [m3u8Content, setM3u8Content] = useState('');
+  const [generatedUrl, setGeneratedUrl] = useState('');
+  const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [subName, setSubName] = useState('');
-  const [cues, setCues] = useState([]);
-  const [activeSubtitle, setActiveSubtitle] = useState('');
 
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const blobUrlRef = useRef(null);
 
-  // Chuyển đổi timestamp dạng HH:MM:SS,mmm hoặc HH:MM:SS.mmm sang giây
-  const timeToSeconds = (timeStr) => {
-    const parts = timeStr.trim().replace(',', '.').split(':');
-    if (parts.length === 3) {
-      return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
-    } else if (parts.length === 2) {
-      return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+  const cleanUpPlayer = () => {
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
     }
-    return 0;
-  };
-
-  // Parser đọc trực tiếp cả file .srt và .vtt thành danh sách mốc thời gian
-  const parseSubtitleText = (text) => {
-    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const blocks = normalized.split('\n\n');
-    const parsedCues = [];
-
-    const timeRegex = /((?:\d{2}:)?\d{2}:\d{2}[,.]\d{3})\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}[,.]\d{3})/;
-
-    blocks.forEach((block) => {
-      const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
-      for (let i = 0; i < lines.length; i++) {
-        const match = lines[i].match(timeRegex);
-        if (match) {
-          const start = timeToSeconds(match[1]);
-          const end = timeToSeconds(match[2]);
-          const content = lines.slice(i + 1).join('\n').replace(/<[^>]+>/g, ''); // Bỏ mã html màu mè nếu có
-          if (content) {
-            parsedCues.push({ start, end, text: content });
-          }
-          break;
-        }
-      }
-    });
-
-    return parsedCues;
-  };
-
-  const handleSubtitleFile = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target.result;
-      const parsed = parseSubtitleText(content);
-      setCues(parsed);
-      setSubName(file.name);
-    };
-    reader.readAsText(file);
-  };
-
-  const handlePlayStream = () => {
-    setErrorMsg('');
-    const trimmed = m3u8Content.trim();
-    if (!trimmed.startsWith('#EXTM3U')) {
-      setErrorMsg('Nội dung phải bắt đầu bằng #EXTM3U');
-      return;
-    }
-
     if (blobUrlRef.current) {
       URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
     }
+  };
 
-    const blob = new Blob([trimmed], { type: 'application/vnd.apple.mpegurl' });
+  const processM3U8Content = () => {
+    let trimmed = m3u8Content.trim();
+    if (!trimmed.startsWith('#EXTM3U')) {
+      setErrorMsg('Lỗi: Nội dung playlist phải bắt đầu bằng #EXTM3U');
+      return null;
+    }
+    if (!trimmed.includes('#EXT-X-ENDLIST')) {
+      trimmed += '\n#EXT-X-ENDLIST';
+    }
+    return trimmed;
+  };
+
+  // 1. Phát trực tiếp trên Web Player
+  const handlePlayStream = () => {
+    setErrorMsg('');
+    const validContent = processM3U8Content();
+    if (!validContent) return;
+
+    cleanUpPlayer();
+
+    // Dùng Blob URL nội bộ để phát tức thì trên web
+    const blob = new Blob([validContent], { type: 'application/x-mpegURL' });
     const playlistUrl = URL.createObjectURL(blob);
     blobUrlRef.current = playlistUrl;
 
     const video = videoRef.current;
     if (!video) return;
 
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-    }
-
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
+        lowLatencyMode: false,
+        backBufferLength: 60,
+        maxBufferLength: 30,
+        xhrSetup: (xhr) => {
+          xhr.withCredentials = false;
+        },
       });
       hlsRef.current = hls;
 
@@ -98,72 +69,91 @@ export default function App() {
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch((err) => console.log('Chặn autoplay:', err));
+        video.play().catch(() => console.warn('Cần tương tác để phát video.'));
       });
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          setErrorMsg(`Lỗi luồng phát: ${data.details}`);
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            setErrorMsg('Lỗi mạng hoặc CDN chặn CORS.');
+            hls.startLoad();
+          } else {
+            setErrorMsg(`Lỗi media: ${data.details}`);
+            hls.recoverMediaError();
+          }
         }
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = playlistUrl;
-      video.addEventListener('loadedmetadata', () => {
-        video.play().catch((err) => console.log('Chặn autoplay:', err));
-      });
+      video.addEventListener('loadedmetadata', () => video.play().catch(() => {}));
     } else {
       setErrorMsg('Trình duyệt không hỗ trợ HLS.');
     }
   };
 
-  // Cập nhật text phụ đề tương ứng với thời gian video đang phát
-  const handleTimeUpdate = () => {
-    const video = videoRef.current;
-    if (!video || cues.length === 0) {
-      setActiveSubtitle('');
-      return;
+  // 2. Tạo Link tĩnh cho nPlayer / App ngoài
+  const handleGenerateLink = () => {
+    setErrorMsg('');
+    const validContent = processM3U8Content();
+    if (!validContent) return;
+
+    try {
+      // Mã hóa chuỗi UTF-8 sang Base64 an toàn cho URL
+      const base64Data = btoa(unescape(encodeURIComponent(validContent)));
+      const finalUrl = `${WORKER_ENDPOINT}?data=${encodeURIComponent(base64Data)}`;
+      setGeneratedUrl(finalUrl);
+      setCopied(false);
+    } catch (err) {
+      setErrorMsg('Lỗi mã hóa dữ liệu m3u8: ' + err.message);
     }
-    const currentTime = video.currentTime;
-    const currentCue = cues.find(
-      (cue) => currentTime >= cue.start && currentTime <= cue.end
+  };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(generatedUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Tạo URL scheme mở thẳng qua nPlayer (hỗ trợ cả iOS và Android)
+  const getNPlayerUrl = () => {
+    if (!generatedUrl) return '#';
+    return generatedUrl.replace(/^https?:\/\//, (match) => 
+      match.startsWith('https') ? 'nplayer-https://' : 'nplayer-http://'
     );
-    setActiveSubtitle(currentCue ? currentCue.text : '');
   };
 
   useEffect(() => {
-    return () => {
-      if (hlsRef.current) hlsRef.current.destroy();
-      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
-    };
+    return () => cleanUpPlayer();
   }, []);
 
   return (
-    <div style={{ padding: 20, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <h2>Trình phát M3U8 kèm Phụ đề Overlay (.srt / .vtt)</h2>
+    <div style={{ padding: 20, maxWidth: 900, margin: '0 auto', fontFamily: 'system-ui, sans-serif' }}>
+      <h2>Trình phát & Tạo Link M3U8 cho nPlayer</h2>
 
       <textarea
-        rows={8}
+        rows={9}
         style={{
           width: '100%',
-          backgroundColor: '#1e293b',
-          color: '#e2e8f0',
-          borderRadius: 6,
-          padding: 10,
+          backgroundColor: '#0f172a',
+          color: '#38bdf8',
+          borderRadius: 8,
+          padding: 12,
           boxSizing: 'border-box',
           border: '1px solid #334155',
           fontFamily: 'monospace',
           fontSize: 13,
+          lineHeight: '1.4',
         }}
-        placeholder="Dán toàn bộ nội dung #EXTM3U vào đây..."
+        placeholder="Dán nội dung #EXTM3U vào đây..."
         value={m3u8Content}
         onChange={(e) => setM3u8Content(e.target.value)}
       />
 
-      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 10, marginTop: 12, marginBottom: 16 }}>
         <button
           onClick={handlePlayStream}
           style={{
-            padding: '10px 24px',
+            padding: '10px 18px',
             background: '#2563eb',
             color: '#fff',
             border: 'none',
@@ -172,89 +162,82 @@ export default function App() {
             fontWeight: 600,
           }}
         >
-          Nạp luồng & Phát
+          Phát Trực Tiếp
         </button>
 
-        <label
+        <button
+          onClick={handleGenerateLink}
           style={{
-            padding: '9px 16px',
-            background: '#334155',
-            color: '#f8fafc',
+            padding: '10px 18px',
+            background: '#059669',
+            color: '#fff',
+            border: 'none',
             borderRadius: 6,
             cursor: 'pointer',
-            fontSize: 14,
-            border: '1px solid #475569',
+            fontWeight: 600,
           }}
         >
-          Chọn tệp phụ đề (.srt, .vtt)
-          <input
-            type="file"
-            accept=".srt,.vtt"
-            style={{ display: 'none' }}
-            onChange={handleSubtitleFile}
-          />
-        </label>
-
-        {subName && (
-          <span style={{ fontSize: 13, color: '#38bdf8' }}>
-            Đã nạp: {subName} ({cues.length} câu)
-          </span>
-        )}
+          Tạo Link cho nPlayer
+        </button>
       </div>
 
-      {errorMsg && (
-        <div style={{ color: '#ef4444', marginTop: 15 }}>{errorMsg}</div>
+      {generatedUrl && (
+        <div style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', padding: 12, borderRadius: 6, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: '#334155', marginBottom: 6, fontWeight: 600 }}>Link M3U8 online:</div>
+          <input
+            type="text"
+            readOnly
+            value={generatedUrl}
+            style={{ width: '100%', padding: '6px 8px', fontSize: 12, boxSizing: 'border-box', borderRadius: 4, border: '1px solid #cbd5e1' }}
+          />
+          <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+            <button
+              onClick={copyToClipboard}
+              style={{
+                padding: '6px 12px',
+                background: copied ? '#15803d' : '#475569',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+            >
+              {copied ? '✓ Đã sao chép' : 'Sao chép Link'}
+            </button>
+
+            <a
+              href={getNPlayerUrl()}
+              style={{
+                display: 'inline-block',
+                padding: '6px 12px',
+                background: '#e11d48',
+                color: '#fff',
+                textDecoration: 'none',
+                borderRadius: 4,
+                fontSize: 13,
+                fontWeight: 500,
+              }}
+            >
+              Mở bằng nPlayer App
+            </a>
+          </div>
+        </div>
       )}
 
-      {/* Khung chứa Video & Lớp đè phụ đề */}
-      <div
-        style={{
-          position: 'relative',
-          background: '#000',
-          borderRadius: 8,
-          overflow: 'hidden',
-          marginTop: 20,
-        }}
-      >
+      {errorMsg && (
+        <div style={{ background: '#fee2e2', color: '#b91c1c', padding: 10, borderRadius: 6, marginBottom: 16, fontSize: 14 }}>
+          {errorMsg}
+        </div>
+      )}
+
+      <div style={{ background: '#000', borderRadius: 8, overflow: 'hidden' }}>
         <video
           ref={videoRef}
           controls
-          onTimeUpdate={handleTimeUpdate}
-          style={{ width: '100%', maxHeight: '520px', display: 'block' }}
+          playsInline
+          style={{ width: '100%', maxHeight: '500px', display: 'block' }}
         />
-
-        {/* Lớp hiển thị phụ đề nổi trên video */}
-        {activeSubtitle && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: '55px',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              textAlign: 'center',
-              pointerEvents: 'none',
-              width: '90%',
-              zIndex: 10,
-            }}
-          >
-            <span
-              style={{
-                display: 'inline-block',
-                backgroundColor: 'rgba(0, 0, 0, 0.75)',
-                color: '#ffffff',
-                padding: '4px 12px',
-                borderRadius: '4px',
-                fontSize: '18px',
-                fontWeight: '600',
-                lineHeight: '1.4',
-                whiteSpace: 'pre-line',
-                textShadow: '0 0 2px #000, 1px 1px 2px #000',
-              }}
-            >
-              {activeSubtitle}
-            </span>
-          </div>
-        )}
       </div>
     </div>
   );
