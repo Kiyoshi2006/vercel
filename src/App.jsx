@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import Hls from 'hls.js';
 
 export default function App() {
-  const [videoUrl, setVideoUrl] = useState('');
+  const [m3u8Content, setM3u8Content] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [subName, setSubName] = useState('');
   const [cues, setCues] = useState([]);
@@ -12,7 +12,9 @@ export default function App() {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const hlsRef = useRef(null);
+  const blobUrlRef = useRef(null);
 
+  // Xử lý thời gian phụ đề
   const parseTimeToSeconds = (str) => {
     if (!str) return 0;
     const parts = str.trim().replace(',', '.').split(':');
@@ -104,7 +106,6 @@ export default function App() {
     return parsedCues;
   };
 
-  // Chọn tệp phụ đề offline từ máy tính/điện thoại
   const handleSubtitleFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -128,13 +129,22 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  // Logic nạp và phát luồng M3U8 chuẩn từ bản chạy tốt của bạn
   const handlePlayStream = () => {
     setErrorMsg('');
-    const vUrl = videoUrl.trim();
-    if (!vUrl) {
-      setErrorMsg('Vui lòng nhập link video từ WebDAV!');
+    const trimmed = m3u8Content.trim();
+    if (!trimmed.startsWith('#EXTM3U')) {
+      setErrorMsg('Nội dung phải bắt đầu bằng #EXTM3U');
       return;
     }
+
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+    }
+
+    const blob = new Blob([trimmed], { type: 'application/vnd.apple.mpegurl' });
+    const playlistUrl = URL.createObjectURL(blob);
+    blobUrlRef.current = playlistUrl;
 
     const video = videoRef.current;
     if (!video) return;
@@ -143,21 +153,32 @@ export default function App() {
       hlsRef.current.destroy();
     }
 
-    if (vUrl.includes('.m3u8') && Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-      hlsRef.current = hls;
-      hls.loadSource(vUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch(() => {});
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
       });
+      hlsRef.current = hls;
+
+      hls.loadSource(playlistUrl);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch((err) => console.log('Chặn autoplay:', err));
+      });
+
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) setErrorMsg(`Lỗi HLS: ${data.details}`);
+        if (data.fatal) {
+          setErrorMsg(`Lỗi luồng phát: ${data.details}`);
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = playlistUrl;
+      video.addEventListener('loadedmetadata', () => {
+        video.play().catch((err) => console.log('Chặn autoplay:', err));
       });
     } else {
-      video.src = vUrl;
-      video.load();
-      video.play().catch(() => {});
+      setErrorMsg('Trình duyệt không hỗ trợ HLS.');
     }
   };
 
@@ -181,7 +202,9 @@ export default function App() {
     if (!container) return;
 
     if (!document.fullscreenElement) {
-      container.requestFullscreen().catch(() => {});
+      container.requestFullscreen().catch((err) => {
+        console.error('Không thể mở toàn màn hình:', err);
+      });
     } else {
       document.exitFullscreen();
     }
@@ -192,44 +215,52 @@ export default function App() {
       setIsFullscreen(!!document.fullscreenElement);
     };
 
+    const handleOrientationChange = () => {
+      if (window.innerHeight < window.innerWidth) {
+        if (!document.fullscreenElement && containerRef.current) {
+          containerRef.current.requestFullscreen().catch(() => {});
+        }
+      }
+    };
+
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('resize', handleOrientationChange);
+
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('resize', handleOrientationChange);
       if (hlsRef.current) hlsRef.current.destroy();
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
     };
   }, []);
 
   return (
-    <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif', color: '#f8fafc' }}>
-      <h2>Trình phát Video WebDAV + Sub Offline</h2>
+    <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif' }}>
+      <h2>Trình phát M3U8 + Phụ đề Offline</h2>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-        <div>
-          <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Link Video (.mkv, .mp4, .m3u8):</label>
-          <input
-            type="text"
-            style={{
-              width: '100%',
-              backgroundColor: '#1e293b',
-              color: '#e2e8f0',
-              borderRadius: 6,
-              padding: 10,
-              boxSizing: 'border-box',
-              border: '1px solid #334155',
-              fontSize: 13,
-            }}
-            placeholder="Dán link video từ WebDAV..."
-            value={videoUrl}
-            onChange={(e) => setVideoUrl(e.target.value)}
-          />
-        </div>
-      </div>
+      <textarea
+        rows={6}
+        style={{
+          width: '100%',
+          backgroundColor: '#1e293b',
+          color: '#e2e8f0',
+          borderRadius: 6,
+          padding: 10,
+          boxSizing: 'border-box',
+          border: '1px solid #334155',
+          fontFamily: 'monospace',
+          fontSize: 12,
+        }}
+        placeholder="Dán toàn bộ nội dung #EXTM3U vào đây..."
+        value={m3u8Content}
+        onChange={(e) => setM3u8Content(e.target.value)}
+      />
 
-      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
           onClick={handlePlayStream}
           style={{
-            padding: '10px 24px',
+            padding: '8px 20px',
             background: '#2563eb',
             color: '#fff',
             border: 'none',
@@ -238,13 +269,12 @@ export default function App() {
             fontWeight: 600,
           }}
         >
-          Phát Ngay
+          Nạp luồng & Phát
         </button>
 
-        {/* Nút chọn tệp phụ đề offline từ máy */}
         <label
           style={{
-            padding: '9px 16px',
+            padding: '8px 14px',
             background: '#334155',
             color: '#f8fafc',
             borderRadius: 6,
@@ -273,9 +303,10 @@ export default function App() {
         <div style={{ color: '#ef4444', marginTop: 10, fontSize: 13 }}>{errorMsg}</div>
       )}
 
-      {/* Khung video có nút Toàn màn hình góc phải, bấm vào để hiện sub chuẩn full màn */}
+      {/* Khung video kết hợp Double click/tap & Nút bấm tùy chỉnh để Full màn hình kèm sub chuẩn */}
       <div
         ref={containerRef}
+        onDoubleClick={toggleFullscreen}
         style={{
           position: 'relative',
           width: '100%',
@@ -288,6 +319,7 @@ export default function App() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          cursor: 'pointer',
         }}
       >
         <video
@@ -303,7 +335,6 @@ export default function App() {
           }}
         />
 
-        {/* Nút Toàn màn hình cố định trên góc video để fix lỗi mất sub khi full màn */}
         <button
           onClick={toggleFullscreen}
           style={{
@@ -314,7 +345,7 @@ export default function App() {
             color: '#fff',
             border: '1px solid rgba(255, 255, 255, 0.3)',
             borderRadius: '4px',
-            padding: '6px 12px',
+            padding: '6px 10px',
             cursor: 'pointer',
             fontSize: '12px',
             zIndex: 20,
