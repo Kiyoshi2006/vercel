@@ -12,33 +12,97 @@ export default function App() {
   const hlsRef = useRef(null);
   const blobUrlRef = useRef(null);
 
-  // Chuyển đổi timestamp dạng HH:MM:SS,mmm hoặc HH:MM:SS.mmm sang giây
-  const timeToSeconds = (timeStr) => {
-    const parts = timeStr.trim().replace(',', '.').split(':');
+  // Chuyển đổi timestamp dạng H:MM:SS.cs (ASS) hoặc HH:MM:SS,mmm (SRT) sang giây
+  const parseTimeToSeconds = (str) => {
+    if (!str) return 0;
+    const parts = str.trim().replace(',', '.').split(':');
     if (parts.length === 3) {
       return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
     } else if (parts.length === 2) {
       return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
     }
-    return 0;
+    return parseFloat(str) || 0;
   };
 
-  // Parser đọc trực tiếp cả file .srt và .vtt thành danh sách mốc thời gian
-  const parseSubtitleText = (text) => {
+  // Parser dành riêng cho file phụ đề .ass / .ssa
+  const parseAssSubtitle = (text) => {
+    const lines = text.split(/\r?\n/);
+    const parsedCues = [];
+    let formatIndexMap = null;
+
+    for (let line of lines) {
+      line = line.trim();
+      if (!line) continue;
+
+      // Đọc thứ tự các trường từ dòng Format:
+      if (line.startsWith('Format:')) {
+        const fields = line.substring(7).split(',').map((f) => f.trim().toLowerCase());
+        formatIndexMap = {
+          start: fields.indexOf('start'),
+          end: fields.indexOf('end'),
+          text: fields.indexOf('text'),
+        };
+      }
+
+      // Đọc nội dung thoại từ dòng Dialogue:
+      if (line.startsWith('Dialogue:')) {
+        const valueStr = line.substring(9).trim();
+        let parts;
+
+        // Nếu xác định được vị trí của trường Text
+        if (formatIndexMap && formatIndexMap.text !== -1) {
+          const splitLimit = formatIndexMap.text;
+          const temp = valueStr.split(',');
+          const prefix = temp.slice(0, splitLimit);
+          const textPart = temp.slice(splitLimit).join(',');
+          parts = [...prefix, textPart];
+        } else {
+          // Mặc định chuẩn ASS nếu thiếu dòng Format
+          const temp = valueStr.split(',');
+          parts = [...temp.slice(0, 9), temp.slice(9).join(',')];
+        }
+
+        const startIdx = formatIndexMap ? formatIndexMap.start : 1;
+        const endIdx = formatIndexMap ? formatIndexMap.end : 2;
+        const textIdx = formatIndexMap ? formatIndexMap.text : 9;
+
+        if (parts.length > Math.max(startIdx, endIdx, textIdx)) {
+          const start = parseTimeToSeconds(parts[startIdx]);
+          const end = parseTimeToSeconds(parts[endIdx]);
+
+          // Lọc bỏ các mã effect/style của ASS như {\pos...}, \N (ngắt dòng)
+          const rawText = parts[textIdx];
+          const cleanText = rawText
+            .replace(/\{[^}]+\}/g, '')
+            .replace(/\\N/gi, '\n')
+            .replace(/\\n/gi, '\n')
+            .replace(/\\h/gi, ' ')
+            .trim();
+
+          if (cleanText) {
+            parsedCues.push({ start, end, text: cleanText });
+          }
+        }
+      }
+    }
+    return parsedCues;
+  };
+
+  // Parser dành cho file .srt và .vtt
+  const parseSrtOrVtt = (text) => {
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const blocks = normalized.split('\n\n');
     const parsedCues = [];
-
-    const timeRegex = /((?:\d{2}:)?\d{2}:\d{2}[,.]\d{3})\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}[,.]\d{3})/;
+    const timeRegex = /((?:\d{2}:)?\d{2}:\d{2}[,.]\d{2,3})\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}[,.]\d{2,3})/;
 
     blocks.forEach((block) => {
       const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
       for (let i = 0; i < lines.length; i++) {
         const match = lines[i].match(timeRegex);
         if (match) {
-          const start = timeToSeconds(match[1]);
-          const end = timeToSeconds(match[2]);
-          const content = lines.slice(i + 1).join('\n').replace(/<[^>]+>/g, ''); // Bỏ mã html màu mè nếu có
+          const start = parseTimeToSeconds(match[1]);
+          const end = parseTimeToSeconds(match[2]);
+          const content = lines.slice(i + 1).join('\n').replace(/<[^>]+>/g, '').trim();
           if (content) {
             parsedCues.push({ start, end, text: content });
           }
@@ -46,7 +110,6 @@ export default function App() {
         }
       }
     });
-
     return parsedCues;
   };
 
@@ -57,7 +120,17 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target.result;
-      const parsed = parseSubtitleText(content);
+      const lowerName = file.name.toLowerCase();
+      let parsed = [];
+
+      if (lowerName.endsWith('.ass') || lowerName.endsWith('.ssa')) {
+        parsed = parseAssSubtitle(content);
+      } else {
+        parsed = parseSrtOrVtt(content);
+      }
+
+      // Sắp xếp các câu thoại theo mốc thời gian bắt đầu
+      parsed.sort((a, b) => a.start - b.start);
       setCues(parsed);
       setSubName(file.name);
     };
@@ -116,18 +189,21 @@ export default function App() {
     }
   };
 
-  // Cập nhật text phụ đề tương ứng với thời gian video đang phát
   const handleTimeUpdate = () => {
     const video = videoRef.current;
     if (!video || cues.length === 0) {
       setActiveSubtitle('');
       return;
     }
-    const currentTime = video.currentTime;
-    const currentCue = cues.find(
-      (cue) => currentTime >= cue.start && currentTime <= cue.end
-    );
-    setActiveSubtitle(currentCue ? currentCue.text : '');
+    const curr = video.currentTime;
+    
+    // Tìm các câu thoại trùng khớp mốc thời gian hiện tại
+    const matchingCues = cues.filter((c) => curr >= c.start && curr <= c.end);
+    if (matchingCues.length > 0) {
+      setActiveSubtitle(matchingCues.map((c) => c.text).join('\n'));
+    } else {
+      setActiveSubtitle('');
+    }
   };
 
   useEffect(() => {
@@ -139,7 +215,7 @@ export default function App() {
 
   return (
     <div style={{ padding: 20, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <h2>Trình phát M3U8 kèm Phụ đề Overlay (.srt / .vtt)</h2>
+      <h2>Trình phát M3U8 (Hỗ trợ .ass / .srt / .vtt)</h2>
 
       <textarea
         rows={8}
@@ -186,17 +262,17 @@ export default function App() {
             border: '1px solid #475569',
           }}
         >
-          Chọn tệp phụ đề (.srt, .vtt)
+          Chọn tệp phụ đề (.ass, .srt, .vtt)
           <input
             type="file"
-            accept=".srt,.vtt"
+            accept=".ass,.ssa,.srt,.vtt"
             style={{ display: 'none' }}
             onChange={handleSubtitleFile}
           />
         </label>
 
         {subName && (
-          <span style={{ fontSize: 13, color: '#38bdf8' }}>
+          <span style={{ fontSize: 13, color: cues.length > 0 ? '#38bdf8' : '#ef4444' }}>
             Đã nạp: {subName} ({cues.length} câu)
           </span>
         )}
@@ -206,7 +282,6 @@ export default function App() {
         <div style={{ color: '#ef4444', marginTop: 15 }}>{errorMsg}</div>
       )}
 
-      {/* Khung chứa Video & Lớp đè phụ đề */}
       <div
         style={{
           position: 'relative',
@@ -219,11 +294,11 @@ export default function App() {
         <video
           ref={videoRef}
           controls
+          playsInline
           onTimeUpdate={handleTimeUpdate}
           style={{ width: '100%', maxHeight: '520px', display: 'block' }}
         />
 
-        {/* Lớp hiển thị phụ đề nổi trên video */}
         {activeSubtitle && (
           <div
             style={{
@@ -248,7 +323,7 @@ export default function App() {
                 fontWeight: '600',
                 lineHeight: '1.4',
                 whiteSpace: 'pre-line',
-                textShadow: '0 0 2px #000, 1px 1px 2px #000',
+                textShadow: '0 0 3px #000, 1px 1px 3px #000',
               }}
             >
               {activeSubtitle}
