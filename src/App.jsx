@@ -1,22 +1,53 @@
-  import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Hls from 'hls.js';
 
 export default function App() {
   const [m3u8Content, setM3u8Content] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [subName, setSubName] = useState('');
-  
+  const [cues, setCues] = useState([]);
+  const [activeSubtitle, setActiveSubtitle] = useState('');
+
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
-  const playlistBlobUrlRef = useRef(null);
-  const subBlobUrlRef = useRef(null);
+  const blobUrlRef = useRef(null);
 
-  // Chuyển đổi định dạng SRT sang WebVTT nếu tải tệp .srt
-  const convertSrtToVtt = (srtText) => {
-    let vtt = 'WEBVTT\n\n' + srtText
-      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
-      .replace(/\{[^\}]+\}/g, '');
-    return vtt;
+  // Chuyển đổi timestamp dạng HH:MM:SS,mmm hoặc HH:MM:SS.mmm sang giây
+  const timeToSeconds = (timeStr) => {
+    const parts = timeStr.trim().replace(',', '.').split(':');
+    if (parts.length === 3) {
+      return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
+    } else if (parts.length === 2) {
+      return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+    }
+    return 0;
+  };
+
+  // Parser đọc trực tiếp cả file .srt và .vtt thành danh sách mốc thời gian
+  const parseSubtitleText = (text) => {
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const blocks = normalized.split('\n\n');
+    const parsedCues = [];
+
+    const timeRegex = /((?:\d{2}:)?\d{2}:\d{2}[,.]\d{3})\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}[,.]\d{3})/;
+
+    blocks.forEach((block) => {
+      const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length; i++) {
+        const match = lines[i].match(timeRegex);
+        if (match) {
+          const start = timeToSeconds(match[1]);
+          const end = timeToSeconds(match[2]);
+          const content = lines.slice(i + 1).join('\n').replace(/<[^>]+>/g, ''); // Bỏ mã html màu mè nếu có
+          if (content) {
+            parsedCues.push({ start, end, text: content });
+          }
+          break;
+        }
+      }
+    });
+
+    return parsedCues;
   };
 
   const handleSubtitleFile = (e) => {
@@ -25,50 +56,12 @@ export default function App() {
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      let content = event.target.result;
-      const isSrt = file.name.endsWith('.srt');
-
-      if (isSrt) {
-        content = convertSrtToVtt(content);
-      }
-
-      if (subBlobUrlRef.current) {
-        URL.revokeObjectURL(subBlobUrlRef.current);
-      }
-
-      const blob = new Blob([content], { type: 'text/vtt' });
-      subBlobUrlRef.current = URL.createObjectURL(blob);
+      const content = event.target.result;
+      const parsed = parseSubtitleText(content);
+      setCues(parsed);
       setSubName(file.name);
-      attachSubtitleTrack(subBlobUrlRef.current, file.name);
     };
     reader.readAsText(file);
-  };
-
-  const attachSubtitleTrack = (url, label) => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    // Xóa các track phụ đề cũ đã thêm trước đó
-    const oldTracks = video.querySelectorAll('track');
-    oldTracks.forEach((t) => t.remove());
-
-    const track = document.createElement('track');
-    track.kind = 'subtitles';
-    track.label = label || 'Phụ đề';
-    track.srclang = 'vi';
-    track.src = url;
-    track.default = true;
-
-    video.appendChild(track);
-
-    // Kích hoạt hiển thị track
-    setTimeout(() => {
-      if (video.textTracks && video.textTracks.length > 0) {
-        for (let i = 0; i < video.textTracks.length; i++) {
-          video.textTracks[i].mode = 'showing';
-        }
-      }
-    }, 100);
   };
 
   const handlePlayStream = () => {
@@ -79,13 +72,13 @@ export default function App() {
       return;
     }
 
-    if (playlistBlobUrlRef.current) {
-      URL.revokeObjectURL(playlistBlobUrlRef.current);
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
     }
 
     const blob = new Blob([trimmed], { type: 'application/vnd.apple.mpegurl' });
     const playlistUrl = URL.createObjectURL(blob);
-    playlistBlobUrlRef.current = playlistUrl;
+    blobUrlRef.current = playlistUrl;
 
     const video = videoRef.current;
     if (!video) return;
@@ -105,10 +98,6 @@ export default function App() {
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        // Nạp lại phụ đề nếu đã chọn tệp trước khi bấm phát
-        if (subBlobUrlRef.current) {
-          attachSubtitleTrack(subBlobUrlRef.current, subName);
-        }
         video.play().catch((err) => console.log('Chặn autoplay:', err));
       });
 
@@ -120,9 +109,6 @@ export default function App() {
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = playlistUrl;
       video.addEventListener('loadedmetadata', () => {
-        if (subBlobUrlRef.current) {
-          attachSubtitleTrack(subBlobUrlRef.current, subName);
-        }
         video.play().catch((err) => console.log('Chặn autoplay:', err));
       });
     } else {
@@ -130,17 +116,30 @@ export default function App() {
     }
   };
 
+  // Cập nhật text phụ đề tương ứng với thời gian video đang phát
+  const handleTimeUpdate = () => {
+    const video = videoRef.current;
+    if (!video || cues.length === 0) {
+      setActiveSubtitle('');
+      return;
+    }
+    const currentTime = video.currentTime;
+    const currentCue = cues.find(
+      (cue) => currentTime >= cue.start && currentTime <= cue.end
+    );
+    setActiveSubtitle(currentCue ? currentCue.text : '');
+  };
+
   useEffect(() => {
     return () => {
       if (hlsRef.current) hlsRef.current.destroy();
-      if (playlistBlobUrlRef.current) URL.revokeObjectURL(playlistBlobUrlRef.current);
-      if (subBlobUrlRef.current) URL.revokeObjectURL(subBlobUrlRef.current);
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
     };
   }, []);
 
   return (
     <div style={{ padding: 20, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <h2>Trình phát M3U8 kèm Phụ đề (.srt / .vtt)</h2>
+      <h2>Trình phát M3U8 kèm Phụ đề Overlay (.srt / .vtt)</h2>
 
       <textarea
         rows={8}
@@ -198,7 +197,7 @@ export default function App() {
 
         {subName && (
           <span style={{ fontSize: 13, color: '#38bdf8' }}>
-            Đã nạp: {subName}
+            Đã nạp: {subName} ({cues.length} câu)
           </span>
         )}
       </div>
@@ -207,13 +206,55 @@ export default function App() {
         <div style={{ color: '#ef4444', marginTop: 15 }}>{errorMsg}</div>
       )}
 
-      <div style={{ background: '#000', borderRadius: 8, overflow: 'hidden', marginTop: 20 }}>
+      {/* Khung chứa Video & Lớp đè phụ đề */}
+      <div
+        style={{
+          position: 'relative',
+          background: '#000',
+          borderRadius: 8,
+          overflow: 'hidden',
+          marginTop: 20,
+        }}
+      >
         <video
           ref={videoRef}
           controls
-          crossOrigin="anonymous"
-          style={{ width: '100%', maxHeight: '500px', display: 'block' }}
+          onTimeUpdate={handleTimeUpdate}
+          style={{ width: '100%', maxHeight: '520px', display: 'block' }}
         />
+
+        {/* Lớp hiển thị phụ đề nổi trên video */}
+        {activeSubtitle && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '55px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              textAlign: 'center',
+              pointerEvents: 'none',
+              width: '90%',
+              zIndex: 10,
+            }}
+          >
+            <span
+              style={{
+                display: 'inline-block',
+                backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                color: '#ffffff',
+                padding: '4px 12px',
+                borderRadius: '4px',
+                fontSize: '18px',
+                fontWeight: '600',
+                lineHeight: '1.4',
+                whiteSpace: 'pre-line',
+                textShadow: '0 0 2px #000, 1px 1px 2px #000',
+              }}
+            >
+              {activeSubtitle}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
