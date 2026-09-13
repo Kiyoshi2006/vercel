@@ -7,8 +7,10 @@ export default function App() {
   const [subName, setSubName] = useState('');
   const [cues, setCues] = useState([]);
   const [activeSubtitle, setActiveSubtitle] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const videoRef = useRef(null);
+  const containerRef = useRef(null);
   const hlsRef = useRef(null);
   const blobUrlRef = useRef(null);
 
@@ -193,8 +195,27 @@ export default function App() {
     }
   };
 
+  // Hàm bật/tắt toàn màn hình bao gồm cả khung phụ đề
+  const toggleFullscreen = () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (!document.fullscreenElement) {
+      container.requestFullscreen().catch((err) => {
+        console.error('Lỗi khi bật toàn màn hình:', err);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  };
+
   useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
       if (hlsRef.current) hlsRef.current.destroy();
       if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
     };
@@ -202,7 +223,7 @@ export default function App() {
 
   return (
     <div style={{ padding: 15, maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <h2>Trình phát M3U8 (Responsive Subtitle)</h2>
+      <h2>Trình phát M3U8 (Custom Fullscreen Subtitle)</h2>
 
       <textarea
         rows={6}
@@ -269,16 +290,21 @@ export default function App() {
         <div style={{ color: '#ef4444', marginTop: 10, fontSize: 13 }}>{errorMsg}</div>
       )}
 
-      {/* Khung video cố định chuẩn tỷ lệ và bọc gọn lớp phụ đề bên trong */}
+      {/* Khung chứa tổng thể (Container) bật Fullscreen để ôm trọn cả Video và Subtitle */}
       <div
+        ref={containerRef}
         style={{
           position: 'relative',
           width: '100%',
-          aspectRatio: '16 / 9',
+          aspectRatio: isFullscreen ? 'auto' : '16 / 9',
+          height: isFullscreen ? '100vh' : 'auto',
           background: '#000',
-          borderRadius: 8,
+          borderRadius: isFullscreen ? 0 : 8,
           overflow: 'hidden',
           marginTop: 15,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
         <video
@@ -294,6 +320,27 @@ export default function App() {
           }}
         />
 
+        {/* Nút phóng to toàn màn hình tuỳ chỉnh để ép bao gồm cả sub */}
+        <button
+          onClick={toggleFullscreen}
+          style={{
+            position: 'absolute',
+            top: '12px',
+            right: '12px',
+            background: 'rgba(0, 0, 0, 0.6)',
+            color: '#fff',
+            border: '1px solid rgba(255, 255, 255, 0.3)',
+            borderRadius: '4px',
+            padding: '6px 10px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            zIndex: 20,
+          }}
+        >
+          {isFullscreen ? 'Thu nhỏ' : 'Toàn màn hình'}
+        </button>
+
+        {/* Lớp hiển thị phụ đề nổi nằm trong Container Fullscreen */}
         {activeSubtitle && (
           <div
             style={{
@@ -314,7 +361,7 @@ export default function App() {
                 color: '#ffffff',
                 padding: '4px 10px',
                 borderRadius: '4px',
-                fontSize: 'clamp(14px, 2.5vw, 22px)',
+                fontSize: isFullscreen ? 'clamp(18px, 3vw, 32px)' : 'clamp(14px, 2.5vw, 22px)',
                 fontWeight: '600',
                 lineHeight: '1.4',
                 whiteSpace: 'pre-line',
